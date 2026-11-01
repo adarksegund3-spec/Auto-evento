@@ -523,18 +523,69 @@ local function posOf(o)
     pcall(function() p = o:IsA("Model") and o:GetPivot().Position or o.Position end)
     return p
 end
+local function promptsOf(o)
+    local list = {}
+    for _, x in ipairs(o:GetDescendants()) do
+        if x:IsA("ProximityPrompt") then list[#list + 1] = x end
+    end
+    return list
+end
+
+-- palavras que identificam drop de dinheiro (nome do objeto OU texto do prompt)
+local MONEY_WORDS = { "moneybag", "money", "dinheiro", "cash", "grana" }
+local function hasWord(str, words)
+    str = tostring(str or ""):lower()
+    for _, w in ipairs(words) do
+        if str:find(w, 1, true) then return true end
+    end
+    return false
+end
+local function isMoney(o)
+    if o:FindFirstChildOfClass("Humanoid") then return false end -- jogador/NPC nunca
+    if hasWord(o.Name, MONEY_WORDS) then return true end
+    for _, pr in ipairs(promptsOf(o)) do
+        if hasWord(pr.ActionText, MONEY_WORDS) or hasWord(pr.ObjectText, MONEY_WORDS) then return true end
+    end
+    return false
+end
+
+-- posição válida (evita teleportar pro vazio / coordenada estranha)
+local function sane(o)
+    local p = posOf(o)
+    return p ~= nil and p.X == p.X and p.Y == p.Y and p.Z == p.Z
+        and math.abs(p.X) < 6000 and math.abs(p.Z) < 6000 and p.Y > -30 and p.Y < 600
+end
+local function hasActivePrompt(o)
+    for _, pr in ipairs(promptsOf(o)) do
+        if pr.Enabled then return true end
+    end
+    return false
+end
+-- diagnóstico: Presente_UpPatente aparece parado, invisível e sem colisão (transp=1, anc=true, colide=false)
+-- = suspeito de ser só um marcador. Não teleporta pra ele.
+local function suspect(o)
+    return o:IsA("BasePart") and o.Anchored and o.Transparency >= 1 and not o.CanCollide
+end
+
+local SKIP = { Camera = true, Terrain = true, Map = true, Bullets = true, InvisiblePartsFolder = true }
 local function listTargets(cat)
     local out = {}
     local names = CATS[cat]
     if not names or #names == 0 then return out end
     if cat ~= "Dinheiro" and giftTaken(cat) then return out end
+    local now = os.clock()
     for _, o in ipairs(workspace:GetChildren()) do
-        if o:IsA("BasePart") or o:IsA("Model") then
+        if (o:IsA("BasePart") or o:IsA("Model")) and not SKIP[o.Name] and (not blacklist[o] or blacklist[o] < now) then
+            local ok = false
             for _, n in ipairs(names) do
-                if o.Name == n and (not blacklist[o] or blacklist[o] < os.clock()) then
-                    out[#out + 1] = o
-                    break
-                end
+                if o.Name == n then ok = true break end
+            end
+            if not ok and cat == "Dinheiro" and not Players:GetPlayerFromCharacter(o) then
+                ok = isMoney(o)
+            end
+            -- só alvo com posição válida e prompt ativo (senão seria teleporte no vazio)
+            if ok and sane(o) and hasActivePrompt(o) then
+                out[#out + 1] = o
             end
         end
     end
@@ -557,17 +608,25 @@ local function tpTo(pos)
     pcall(function() r.AssemblyLinearVelocity = Vector3.zero end)
 end
 
-local function promptsOf(o)
-    local list = {}
-    for _, x in ipairs(o:GetDescendants()) do
-        if x:IsA("ProximityPrompt") then list[#list + 1] = x end
-    end
-    return list
-end
-
 -- teleporta em cima, clica várias vezes rápido e já segue para o próximo
 local function collect(o, cat)
     currentCat = cat
+    -- marcador suspeito: tenta de longe, sem teleportar; se não resgatar, ignora por 90s
+    if cat ~= "Dinheiro" and suspect(o) then
+        for _ = 1, 4 do
+            for _, pr in ipairs(promptsOf(o)) do
+                pcall(function()
+                    pr.HoldDuration = 0
+                    pr.MaxActivationDistance = 1e6
+                    if fireproximityprompt then fireproximityprompt(pr) end
+                end)
+            end
+            task.wait(0.1)
+            if giftTaken(cat) then return true end
+        end
+        blacklist[o] = os.clock() + 90
+        return false
+    end
     local t0 = os.clock()
     local fired = false
     while o.Parent and State.Ativo and os.clock() - t0 < 2 do
@@ -598,6 +657,7 @@ local function collect(o, cat)
     return true
 end
 
+local homeCF -- ponto onde o farm foi iniciado
 local function farmLoop(token)
     while State.Ativo and farmToken == token and gui.Parent do
         local picks = {}
@@ -619,6 +679,11 @@ local function farmLoop(token)
                 end
             end
             radar.Text = (onlyGifts and taken) and "Radar de drops · presente já resgatado" or "Radar de drops · procurando drops..."
+            local r = hrp()
+            if r and homeCF and (r.Position - homeCF.Position).Magnitude > 25 then
+                r.CFrame = homeCF -- ocioso: volta pro ponto onde iniciou (não fica no ar/vazio)
+                pcall(function() r.AssemblyLinearVelocity = Vector3.zero end)
+            end
             task.wait(0.4)
         else
             for _, pk in ipairs(picks) do
@@ -633,6 +698,8 @@ local function farmLoop(token)
 end
 
 local function startFarm()
+    local r = hrp()
+    homeCF = r and r.CFrame or nil
     giftDone = {}
     farmToken = farmToken + 1
     task.spawn(farmLoop, farmToken)
