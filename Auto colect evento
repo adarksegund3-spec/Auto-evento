@@ -1,7 +1,11 @@
 --[[
     AUTO FARM EVENTO  |  by: angel
-    v2: painel único, degradê preto -> azul-bebê, shimmer em listra discreta.
-    Lógica de farm entra depois via getgenv().AutoFarmEvento
+    v3: painel único, degradê preto -> azul-bebê, shimmer em listra discreta.
+    Dropdown preenchido com os drops confirmados pelo diagnóstico:
+      Up patente -> Workspace.Presente_UpPatente
+      Gamepass   -> Workspace.Presente_Gamepass
+      Dinheiro   -> MoneyBag (ainda não apareceu em nenhum diagnóstico)
+    Estado exposto em getgenv().AutoFarmEvento
 ]]
 
 local Players = game:GetService("Players")
@@ -470,12 +474,43 @@ ProximityPromptService.PromptButtonHoldBegan:Connect(function(prompt)
     end
 end)
 
--- nomes dos drops por categoria (Gamepass entra depois do diagnóstico)
+-- nomes dos drops por categoria (UpPatente e Gamepass confirmados pelo diagnóstico)
+local RS = game:GetService("ReplicatedStorage")
 local CATS = {
     UpPatente = { "Presente_UpPatente" },
-    Gamepass = {},
+    Gamepass = { "Presente_Gamepass" },
     Dinheiro = { "MoneyBag" },
 }
+local PRIORITY = { "UpPatente", "Gamepass", "Dinheiro" } -- presentes somem rápido: vêm antes do dinheiro
+local giftDone, currentCat = {}, nil
+
+-- o jogo só deixa resgatar 1 presente de cada tipo
+local function giftTaken(cat)
+    if giftDone[cat] then return true end
+    -- diagnóstico: ao resgatar, o jogador ganha o atributo GamepassGiftCollects=1
+    -- (o de patente segue o padrão Gift sem "gamepass" no nome)
+    for n, v in pairs(lp:GetAttributes()) do
+        local l = n:lower()
+        if l:find("gift", 1, true) and type(v) == "number" and v >= 1 then
+            local isGP = l:find("gamepass", 1, true) ~= nil
+            if (cat == "Gamepass") == isGP then return true end
+        end
+    end
+    return false
+end
+task.spawn(function()
+    local rem = RS:WaitForChild("Remotes", 10)
+    rem = rem and rem:WaitForChild("Notification", 10)
+    if rem and rem:IsA("RemoteEvent") then
+        rem.OnClientEvent:Connect(function(kind, msg)
+            if kind ~= "Presente" or not currentCat then return end
+            msg = tostring(msg):lower()
+            if msg:find("resgatou", 1, true) or msg:find("resgatar no", 1, true) then
+                giftDone[currentCat] = true
+            end
+        end)
+    end
+end)
 local farmToken = 0
 local blacklist = {}
 
@@ -492,6 +527,7 @@ local function listTargets(cat)
     local out = {}
     local names = CATS[cat]
     if not names or #names == 0 then return out end
+    if cat ~= "Dinheiro" and giftTaken(cat) then return out end
     for _, o in ipairs(workspace:GetChildren()) do
         if o:IsA("BasePart") or o:IsA("Model") then
             for _, n in ipairs(names) do
@@ -530,15 +566,16 @@ local function promptsOf(o)
 end
 
 -- teleporta em cima, clica várias vezes rápido e já segue para o próximo
-local function collect(o)
-    local p = posOf(o)
-    if not p then return false end
-    local spot = p + Vector3.new(0, 2.5, 0)
+local function collect(o, cat)
+    currentCat = cat
     local t0 = os.clock()
-    while o.Parent and State.Ativo and os.clock() - t0 < 1.5 do
-        tpTo(spot)
+    local fired = false
+    while o.Parent and State.Ativo and os.clock() - t0 < 2 do
+        local p = posOf(o) -- presentes caem do céu: acompanha a posição atual
+        if p then tpTo(p + Vector3.new(0, 5, 0)) end
         for _, pr in ipairs(promptsOf(o)) do
             if pr.Enabled then
+                fired = true
                 pcall(function() pr.HoldDuration = 0 end)
                 pcall(function()
                     if fireproximityprompt then
@@ -551,6 +588,8 @@ local function collect(o)
             end
         end
         task.wait(0.06)
+        if cat ~= "Dinheiro" and giftTaken(cat) then return true end
+        if not fired and os.clock() - t0 > 0.5 then break end -- sem prompt ativo: não perde tempo
     end
     if o.Parent then
         blacklist[o] = os.clock() + 4
@@ -562,31 +601,31 @@ end
 local function farmLoop(token)
     while State.Ativo and farmToken == token and gui.Parent do
         local picks = {}
-        if State.UmDeCada then
-            for cat in pairs(CATS) do
+        for _, cat in ipairs(PRIORITY) do
+            if State.UmDeCada or State.Selecionados[cat] then
                 local l = sortByDist(listTargets(cat))
-                if l[1] then picks[#picks + 1] = l[1] end
-            end
-            sortByDist(picks)
-        else
-            local all = {}
-            for cat, on in pairs(State.Selecionados) do
-                if on then
-                    for _, o in ipairs(listTargets(cat)) do all[#all + 1] = o end
+                if l[1] then
+                    picks[#picks + 1] = { l[1], cat }
+                    if not State.UmDeCada then break end -- individual: um por vez, na ordem de prioridade
                 end
             end
-            sortByDist(all)
-            if all[1] then picks[1] = all[1] end
         end
         if #picks == 0 or not hrp() then
-            radar.Text = "Radar de drops · procurando drops..."
-            task.wait(0.6)
+            local onlyGifts, taken = true, true
+            for _, cat in ipairs(PRIORITY) do
+                if State.UmDeCada or State.Selecionados[cat] then
+                    if cat == "Dinheiro" then onlyGifts = false
+                    elseif not giftTaken(cat) then taken = false end
+                end
+            end
+            radar.Text = (onlyGifts and taken) and "Radar de drops · presente já resgatado" or "Radar de drops · procurando drops..."
+            task.wait(0.4)
         else
-            for _, o in ipairs(picks) do
+            for _, pk in ipairs(picks) do
                 if not (State.Ativo and farmToken == token) then break end
-                if o.Parent then
-                    radar.Text = "Radar de drops · coletando " .. o.Name:gsub("_", " ")
-                    collect(o)
+                if pk[1].Parent then
+                    radar.Text = "Radar de drops · coletando " .. (pk[1].Name:gsub("_", " "))
+                    collect(pk[1], pk[2])
                 end
             end
         end
@@ -594,6 +633,7 @@ local function farmLoop(token)
 end
 
 local function startFarm()
+    giftDone = {}
     farmToken = farmToken + 1
     task.spawn(farmLoop, farmToken)
 end
@@ -652,495 +692,6 @@ UIS.InputBegan:Connect(function(i)
         if not inside(list, i.Position) and not inside(selBtn, i.Position) then setOpen(false) end
     end
 end)
-
------------------------------------------------------------------- DIAGNÓSTICO (temporário)
-local MarketplaceService = game:GetService("MarketplaceService")
-local TextChatService = game:GetService("TextChatService")
-local RS = game:GetService("ReplicatedStorage")
-local Diag = { rec = false, lines = {}, text = "", header = "", t0 = 0, conns = {}, dropped = 0,
-    bsec = 0, bcount = 0, tracked = {}, nameCount = {}, lastTxt = {}, keyCount = {} }
-local MAX_LINES = 3000
-
-local function clip(s, n) s = tostring(s); if #s > n then return s:sub(1, n) .. "..." end return s end
-local function strip(s) return (tostring(s):gsub("<[^>]->", ""):gsub("%s+", " ")) end
-local function v3(v) return string.format("%.1f,%.1f,%.1f", v.X, v.Y, v.Z) end
-local function myPos()
-    local c = lp.Character
-    local r = c and c:FindFirstChild("HumanoidRootPart")
-    return r and r.Position
-end
-local function dist(p)
-    local m = myPos()
-    if m and p then return (m - p).Magnitude end
-end
-local function conn(sig, fn)
-    local c = sig:Connect(fn)
-    table.insert(Diag.conns, c)
-    return c
-end
-local function log(kind, msg)
-    if not Diag.rec then return end
-    local sec = math.floor(os.clock())
-    if sec ~= Diag.bsec then Diag.bsec = sec; Diag.bcount = 0 end
-    Diag.bcount = Diag.bcount + 1
-    if Diag.bcount > 60 then Diag.dropped = Diag.dropped + 1; return end
-    table.insert(Diag.lines, string.format("[%7.2f] %-8s %s", os.clock() - Diag.t0, kind, clip(msg, 460)))
-    if #Diag.lines > MAX_LINES then table.remove(Diag.lines, 1) end
-end
-local function dedupe(key, win)
-    local n = os.clock()
-    local l = Diag.lastTxt[key]
-    if l and n - l < (win or 1) then return true end
-    Diag.lastTxt[key] = n
-    return false
-end
-local function ser(v, d)
-    local t = typeof(v)
-    if t == "string" then return '"' .. clip(strip(v), 60) .. '"'
-    elseif t == "number" then return string.format("%.4g", v)
-    elseif t == "boolean" or t == "nil" then return tostring(v)
-    elseif t == "Instance" then return v.ClassName .. ":" .. v.Name
-    elseif t == "Vector3" then return "V3(" .. v3(v) .. ")"
-    elseif t == "CFrame" then return "CF(" .. v3(v.Position) .. ")"
-    elseif t == "Color3" then
-        return string.format("C3(%d,%d,%d)", math.floor(v.R * 255 + 0.5), math.floor(v.G * 255 + 0.5), math.floor(v.B * 255 + 0.5))
-    elseif t == "table" and (d or 0) < 2 then
-        local out, n = {}, 0
-        for k, x in pairs(v) do
-            n = n + 1
-            if n > 6 then out[#out + 1] = "..." break end
-            out[#out + 1] = tostring(k) .. "=" .. ser(x, (d or 0) + 1)
-        end
-        return "{" .. table.concat(out, ", ") .. "}"
-    end
-    return t
-end
-
-local function pivotOf(inst)
-    local p
-    pcall(function() p = inst:IsA("Model") and inst:GetPivot().Position or inst.Position end)
-    return p
-end
-
-local function describe(inst)
-    local o = { inst.ClassName .. " '" .. inst.Name .. "'" }
-    local pos, size = pivotOf(inst), nil
-    pcall(function()
-        if inst:IsA("Model") then local _, sz = inst:GetBoundingBox(); size = sz
-        elseif inst:IsA("BasePart") then size = inst.Size end
-    end)
-    if pos then o[#o + 1] = "pos=" .. v3(pos) end
-    if size then o[#o + 1] = "tam=" .. v3(size) end
-    local d = dist(pos)
-    if d then o[#o + 1] = string.format("dist=%.1f", d) end
-    o[#o + 1] = "path=" .. clip(inst:GetFullName(), 120)
-    pcall(function()
-        local at, n = {}, 0
-        for k, v in pairs(inst:GetAttributes()) do
-            n = n + 1
-            if n > 8 then break end
-            at[#at + 1] = k .. "=" .. ser(v, 1)
-        end
-        if #at > 0 then o[#o + 1] = "attr[" .. table.concat(at, ";") .. "]" end
-    end)
-    pcall(function()
-        if inst:IsA("BasePart") then
-            o[#o + 1] = string.format("cor=%s mat=%s transp=%.1f colide=%s anc=%s", ser(inst.Color), inst.Material.Name,
-                inst.Transparency, tostring(inst.CanCollide), tostring(inst.Anchored))
-        end
-    end)
-    local texts, prompts, vals, meshes = {}, {}, {}, {}
-    local touch, click, hum, emit, parts, n = false, false, false, 0, 0, 0
-    pcall(function()
-        for _, x in ipairs(inst:GetDescendants()) do
-            n = n + 1
-            if n > 120 then break end
-            if x:IsA("TextLabel") or x:IsA("TextButton") then
-                if #texts < 4 and x.Text ~= "" then texts[#texts + 1] = '"' .. clip(strip(x.Text), 50) .. '"' end
-            elseif x:IsA("ProximityPrompt") then
-                if #prompts < 3 then
-                    prompts[#prompts + 1] = string.format("%s/%s hold=%.1f dist=%.0f", x.ActionText, x.ObjectText, x.HoldDuration, x.MaxActivationDistance)
-                end
-            elseif x:IsA("ClickDetector") then click = true
-            elseif x:IsA("TouchTransmitter") then touch = true
-            elseif x:IsA("ParticleEmitter") then emit = emit + 1
-            elseif x:IsA("Humanoid") then hum = true
-            elseif x:IsA("ValueBase") then
-                if #vals < 5 then vals[#vals + 1] = x.Name .. "=" .. ser(x.Value, 1) end
-            end
-            if x:IsA("MeshPart") and #meshes < 2 then meshes[#meshes + 1] = x.MeshId end
-            if x:IsA("BasePart") then parts = parts + 1 end
-        end
-        if inst:IsA("MeshPart") then meshes[#meshes + 1] = inst.MeshId end
-    end)
-    if #texts > 0 then o[#o + 1] = "textos[" .. table.concat(texts, " | ") .. "]" end
-    if #prompts > 0 then o[#o + 1] = "prompt[" .. table.concat(prompts, " ; ") .. "]" end
-    if #vals > 0 then o[#o + 1] = "valores[" .. table.concat(vals, ";") .. "]" end
-    if #meshes > 0 then o[#o + 1] = "mesh[" .. table.concat(meshes, ",") .. "]" end
-    local fl = {}
-    if touch then fl[#fl + 1] = "toque" end
-    if click then fl[#fl + 1] = "click" end
-    if hum then fl[#fl + 1] = "humanoid" end
-    if emit > 0 then fl[#fl + 1] = "particulas=" .. emit end
-    if parts > 0 then fl[#fl + 1] = "partes=" .. parts end
-    if #fl > 0 then o[#o + 1] = table.concat(fl, ",") end
-    return table.concat(o, " | ")
-end
-
-local function isCandidate(inst)
-    if not (inst:IsA("Model") or inst:IsA("BasePart") or inst:IsA("Tool")) then return false end
-    if inst:IsA("Terrain") then return false end
-    local par = inst.Parent
-    if not par or par:IsA("Camera") then return false end
-    if inst:FindFirstAncestorOfClass("Model") or inst:FindFirstAncestorOfClass("Humanoid") then return false end
-    if inst:FindFirstAncestor("Bullets") or inst.Name == "BulletImpact" then return false end
-    if inst:IsA("Model") and Players:GetPlayerFromCharacter(inst) then return false end
-    return true
-end
-
-local function track(inst)
-    local born = os.clock()
-    Diag.tracked[inst] = born
-    conn(inst.AncestryChanged, function()
-        if Diag.rec and Diag.tracked[inst] and not inst:IsDescendantOf(workspace) then
-            Diag.tracked[inst] = nil
-            local d = dist(pivotOf(inst))
-            log("REMOVIDO", string.format("%s '%s' vida=%.1fs dist_jogador=%s", inst.ClassName, inst.Name,
-                os.clock() - born, d and string.format("%.1f", d) or "?"))
-        end
-    end)
-end
-
-local function hookLabel(l, kind, silentStart)
-    if l:IsDescendantOf(gui) then return end
-    if kind == "TEXTO3D" then
-        local m = l:FindFirstAncestorOfClass("Model")
-        if m and Players:GetPlayerFromCharacter(m) then return end
-        if l:FindFirstAncestor("DinheiroLeaderboard") then return end
-    end
-    local cnt, last = 0, 0
-    local function emit(why)
-        local tx = l.Text
-        if not tx or tx == "" then return end
-        local now = os.clock()
-        if now - last < 0.4 or cnt >= 25 then return end
-        last = now
-        cnt = cnt + 1
-        local s = strip(tx)
-        local key = l.Name .. "/" .. (l.Parent and l.Parent.Name or "")
-        Diag.keyCount[key] = (Diag.keyCount[key] or 0) + 1
-        if Diag.keyCount[key] > 30 then return end
-        if dedupe(kind .. s, 1.5) then return end
-        log(kind, why .. ' | "' .. clip(s, 160) .. '" | ' .. clip(l:GetFullName(), 110) .. (cnt >= 25 and " (silenciado)" or ""))
-    end
-    if not silentStart then emit("novo") end
-    conn(l:GetPropertyChangedSignal("Text"), function() emit("mudou") end)
-end
-
-local function hookRemote(r)
-    if not r:IsA("RemoteEvent") then return end
-    if r:FindFirstAncestor("WeaponAssets") then return end
-    local cnt = 0
-    conn(r.OnClientEvent, function(...)
-        cnt = cnt + 1
-        if cnt > 40 then return end
-        local a = table.pack(...)
-        local s = {}
-        for i = 1, math.min(a.n, 6) do s[#s + 1] = ser(a[i], 0) end
-        log("REMOTE", r.Name .. "(" .. table.concat(s, ", ") .. ")" .. (cnt == 40 and " (silenciado)" or "") .. " em " .. clip(r:GetFullName(), 90))
-    end)
-end
-
-local function hookStat(v)
-    if not v:IsA("ValueBase") then return end
-    if v:FindFirstAncestorOfClass("PlayerGui") or v:FindFirstAncestorOfClass("Backpack") or v:FindFirstAncestor("PlayerScripts") then return end
-    local old = v.Value
-    conn(v.Changed, function(new)
-        local d = ""
-        if type(new) == "number" and type(old) == "number" then
-            d = " (" .. (new - old >= 0 and "+" or "") .. tostring(new - old) .. ")"
-        end
-        log("STAT", clip(v:GetFullName(), 90) .. ": " .. ser(old, 1) .. " -> " .. ser(new, 1) .. d)
-        old = new
-    end)
-end
-
-local function buildHeader()
-    local h = {}
-    local function add(s) h[#h + 1] = s end
-    add("=== DIAGNOSTICO AUTO FARM EVENTO ===")
-    local name = "?"
-    pcall(function() name = MarketplaceService:GetProductInfo(game.PlaceId).Name end)
-    add("Jogo: " .. name .. " | PlaceId=" .. tostring(game.PlaceId) .. " | Jogadores=" .. #Players:GetPlayers())
-    add("Jogador: " .. lp.Name .. " | pos=" .. (myPos() and v3(myPos()) or "?"))
-    pcall(function()
-        local t = {}
-        local counts, order = {}, {}
-        for _, c in ipairs(workspace:GetChildren()) do
-            if not (c:IsA("Model") and Players:GetPlayerFromCharacter(c)) then
-                local k = c.Name .. ":" .. c.ClassName
-                if not counts[k] then counts[k] = 0; order[#order + 1] = k end
-                counts[k] = counts[k] + 1
-            end
-        end
-        for i, k in ipairs(order) do
-            if i > 60 then break end
-            t[#t + 1] = k .. (counts[k] > 1 and (" x" .. counts[k]) or "")
-        end
-        add("Workspace: " .. table.concat(t, ", "))
-        local seen, smp = {}, {}
-        for _, o in ipairs(workspace:GetChildren()) do
-            if (o:IsA("BasePart") or o:IsA("Model")) and not o:IsA("Terrain") and not seen[o.Name]
-                and not (o:IsA("Model") and Players:GetPlayerFromCharacter(o)) then
-                seen[o.Name] = true
-                if #smp < 12 then smp[#smp + 1] = "  - " .. describe(o) end
-            end
-        end
-        add("Amostras:\n" .. table.concat(smp, "\n"))
-    end)
-    pcall(function()
-        local t = {}
-        for _, x in ipairs(RS:GetDescendants()) do
-            if (x:IsA("RemoteEvent") or x:IsA("RemoteFunction")) and not x:FindFirstAncestor("WeaponAssets") then
-                if #t >= 120 then break end
-                t[#t + 1] = x.ClassName:sub(7, 7) .. ":" .. (x:GetFullName():gsub("^ReplicatedStorage%.", ""))
-            end
-        end
-        add("Remotes (E=Event F=Function): " .. table.concat(t, ", "))
-    end)
-    pcall(function()
-        local t = {}
-        for _, v in ipairs(lp:GetDescendants()) do
-            if v:IsA("ValueBase") and not v:FindFirstAncestorOfClass("PlayerGui") and not v:FindFirstAncestorOfClass("Backpack") and #t < 30 then
-                t[#t + 1] = (v:GetFullName():gsub("^Players%.[^%.]+%.", "")) .. "=" .. ser(v.Value, 1)
-            end
-        end
-        add("Stats: " .. table.concat(t, ", "))
-    end)
-    pcall(function()
-        local t = {}
-        local pg = lp:FindFirstChildOfClass("PlayerGui")
-        for _, g in ipairs(pg and pg:GetChildren() or {}) do
-            if g:IsA("ScreenGui") and g ~= gui and #t < 40 then t[#t + 1] = g.Name .. (g.Enabled and "" or "(off)") end
-        end
-        add("GUIs: " .. table.concat(t, ", "))
-    end)
-    return table.concat(h, "\n")
-end
-
-local function assemble()
-    local out = { Diag.header, "", "--- REGISTROS (" .. #Diag.lines .. ") ---" }
-    for _, l in ipairs(Diag.lines) do out[#out + 1] = l end
-    out[#out + 1] = "--- FIM | descartados por limite: " .. Diag.dropped .. " ---"
-    return table.concat(out, "\n")
-end
-
-local function startDiag()
-    Diag.lines, Diag.dropped, Diag.tracked, Diag.nameCount, Diag.lastTxt = {}, 0, {}, {}, {}
-    Diag.keyCount = {}
-    Diag.text, Diag.header = "", ""
-    Diag.t0 = os.clock()
-    Diag.rec = true
-
-    pcall(function()
-        conn(workspace.DescendantAdded, function(inst)
-            if not Diag.rec then return end
-            if inst:IsA("TextLabel") or inst:IsA("TextButton") then hookLabel(inst, "TEXTO3D") return end
-            if isCandidate(inst) then
-                local n = (Diag.nameCount[inst.Name] or 0) + 1
-                Diag.nameCount[inst.Name] = n
-                if n > 6 and n % 25 ~= 0 then return end
-                task.delay(0.35, function()
-                    if Diag.rec and inst.Parent then
-                        log("NOVO", describe(inst) .. (n > 6 and (" (repetido x" .. n .. ")") or ""))
-                        track(inst)
-                    end
-                end)
-            end
-        end)
-    end)
-    pcall(function()
-        local pg = lp:FindFirstChildOfClass("PlayerGui")
-        if pg then
-            for i, x in ipairs(pg:GetDescendants()) do
-                if i > 1500 then break end
-                if x:IsA("TextLabel") or x:IsA("TextButton") then hookLabel(x, "TEXTO", true) end
-            end
-            conn(pg.DescendantAdded, function(x)
-                if x:IsA("TextLabel") or x:IsA("TextButton") then hookLabel(x, "TEXTO") end
-            end)
-        end
-    end)
-    pcall(function()
-        for _, x in ipairs(RS:GetDescendants()) do hookRemote(x) end
-        conn(RS.DescendantAdded, hookRemote)
-    end)
-    pcall(function()
-        conn(TextChatService.MessageReceived, function(m)
-            local who = m.TextSource and m.TextSource.Name or "sistema"
-            if not dedupe("chat" .. m.Text, 1) then log("CHAT", who .. ": " .. clip(strip(m.Text), 240)) end
-        end)
-    end)
-    pcall(function()
-        local function hookChat(p)
-            conn(p.Chatted, function(msg)
-                if not dedupe("chat" .. msg, 1) then log("CHAT", p.Name .. ": " .. clip(msg, 240)) end
-            end)
-        end
-        for _, p in ipairs(Players:GetPlayers()) do hookChat(p) end
-        conn(Players.PlayerAdded, hookChat)
-    end)
-    pcall(function()
-        local PPS = game:GetService("ProximityPromptService")
-        local function dp(pr)
-            return string.format("%s/%s hold=%.1f dist=%.0f em %s", pr.ActionText, pr.ObjectText, pr.HoldDuration,
-                pr.MaxActivationDistance, clip(pr:GetFullName(), 90))
-        end
-        conn(PPS.PromptShown, function(pr)
-            if not dedupe("ps" .. pr:GetFullName(), 3) then log("PROMPT", "visivel " .. dp(pr)) end
-        end)
-        conn(PPS.PromptButtonHoldBegan, function(pr) log("PROMPT", "segurou " .. dp(pr)) end)
-        conn(PPS.PromptTriggered, function(pr) log("PROMPT", "acionado " .. dp(pr)) end)
-    end)
-    pcall(function()
-        for _, v in ipairs(lp:GetDescendants()) do hookStat(v) end
-        conn(lp.DescendantAdded, hookStat)
-        conn(lp.AttributeChanged, function(n) log("ATTR", n .. "=" .. ser(lp:GetAttribute(n), 1)) end)
-    end)
-
-    task.spawn(function()
-        while Diag.rec do
-            task.wait(3)
-            if not Diag.rec then break end
-            pcall(function()
-                local items = {}
-                for inst in pairs(Diag.tracked) do
-                    if inst.Parent then
-                        local p = pivotOf(inst)
-                        items[#items + 1] = { n = inst.Name, p = p, d = dist(p) or 1e9 }
-                    end
-                end
-                if #items > 0 then
-                    table.sort(items, function(a, b) return a.d < b.d end)
-                    local out = {}
-                    for i = 1, math.min(8, #items) do
-                        local it = items[i]
-                        out[i] = string.format("%s@%s d=%.0f", it.n, it.p and v3(it.p) or "?", it.d > 1e8 and -1 or it.d)
-                    end
-                    log("SNAP", "eu=" .. (myPos() and v3(myPos()) or "?") .. " | vivos=" .. #items .. " | " .. table.concat(out, " ; "))
-                end
-            end)
-        end
-    end)
-
-    Diag.header = buildHeader()
-end
-
-local function stopDiag()
-    Diag.rec = false
-    for _, c in ipairs(Diag.conns) do pcall(function() c:Disconnect() end) end
-    Diag.conns, Diag.tracked = {}, {}
-    Diag.text = assemble()
-    pcall(function() writefile("AutoFarmEvento_Diagnostico.txt", Diag.text) end)
-end
-
------------------------------------------------------------------- ABA ADM (temporária)
-local admPage = make("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Visible = false }, body)
-text(admPage, "DIAGNÓSTICO TEMPORÁRIO", 10, Enum.Font.GothamBold, T.sub, UDim2.fromOffset(16, 10), UDim2.new(1, -90, 0, 14))
-local admCard = make("Frame", {
-    Position = UDim2.fromOffset(14, 32), Size = UDim2.new(1, -28, 0, 62),
-    BackgroundColor3 = T.dark, BackgroundTransparency = 0.3, BorderSizePixel = 0,
-}, admPage)
-corner(admCard, 10)
-make("UIStroke", { Color = T.line, Thickness = 1 }, admCard)
-local admState = text(admCard, "Parado", 13, Enum.Font.GothamBold, T.text, UDim2.fromOffset(12, 6), UDim2.new(1, -24, 0, 18))
-local admInfo = text(admCard, "Registros: 0  ·  00:00", 11, Enum.Font.Gotham, T.sub, UDim2.fromOffset(12, 26), UDim2.new(1, -24, 0, 14))
-local admLast = text(admCard, "", 10, Enum.Font.Gotham, T.sub, UDim2.fromOffset(12, 43), UDim2.new(1, -24, 0, 13))
-
-local recBtn = make("TextButton", {
-    Position = UDim2.fromOffset(14, 102), Size = UDim2.new(1, -28, 0, 38),
-    BackgroundColor3 = WHITE, AutoButtonColor = false, BorderSizePixel = 0,
-    Text = "GRAVAR DIAGNÓSTICO", TextSize = 13, Font = Enum.Font.GothamBold, TextColor3 = T.dark,
-}, admPage)
-corner(recBtn, 11)
-local recGrad = make("UIGradient", { Color = ColorSequence.new(T.blue, T.blueDeep) }, recBtn)
-press(recBtn)
-
-local copyBtn = make("TextButton", {
-    Position = UDim2.fromOffset(14, 148), Size = UDim2.new(1, -28, 0, 38),
-    BackgroundColor3 = T.dark, BackgroundTransparency = 0.3, AutoButtonColor = false, BorderSizePixel = 0,
-    Text = "COPIAR DIAGNÓSTICO", TextSize = 13, Font = Enum.Font.GothamBold, TextColor3 = T.blue,
-}, admPage)
-corner(copyBtn, 11)
-make("UIStroke", { Color = T.blue, Thickness = 1, Transparency = 0.45 }, copyBtn)
-press(copyBtn)
-
-local function flash(btn, txt, back)
-    btn.Text = txt
-    task.delay(1.6, function() btn.Text = back end)
-end
-
-recBtn.Activated:Connect(function()
-    if not Diag.rec then
-        recBtn.Text = "PARAR DIAGNÓSTICO"
-        recGrad.Color = ColorSequence.new(Color3.fromRGB(70, 86, 106), Color3.fromRGB(44, 56, 72))
-        tween(recBtn, 0.2, { TextColor3 = T.text })
-        admState.Text = "Gravando..."
-        admState.TextColor3 = T.blue
-        startDiag()
-    else
-        stopDiag()
-        recBtn.Text = "GRAVAR DIAGNÓSTICO"
-        recGrad.Color = ColorSequence.new(T.blue, T.blueDeep)
-        tween(recBtn, 0.2, { TextColor3 = T.dark })
-        admState.Text = "Salvo · pronto para copiar"
-        admState.TextColor3 = T.text
-        admInfo.Text = "Registros: " .. #Diag.lines
-    end
-end)
-
-copyBtn.Activated:Connect(function()
-    local txt = Diag.rec and assemble() or Diag.text
-    if txt == "" then flash(copyBtn, "SEM REGISTROS", "COPIAR DIAGNÓSTICO") return end
-    local fn = setclipboard or toclipboard or (syn and syn.write_clipboard) or set_clipboard
-    if not fn then flash(copyBtn, "SEM CLIPBOARD", "COPIAR DIAGNÓSTICO") return end
-    local ok = pcall(fn, txt)
-    flash(copyBtn, ok and "COPIADO!" or "FALHOU AO COPIAR", "COPIAR DIAGNÓSTICO")
-end)
-
-task.spawn(function()
-    while gui.Parent do
-        task.wait(0.5)
-        if Diag.rec then
-            local t = os.clock() - Diag.t0
-            admInfo.Text = string.format("Registros: %d  ·  %02d:%02d", #Diag.lines, math.floor(t / 60), math.floor(t % 60))
-            local last = Diag.lines[#Diag.lines]
-            admLast.Text = last and clip(last:sub(11), 70) or ""
-        end
-    end
-end)
-
-local admBtn = make("TextButton", {
-    AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, 8), Size = UDim2.fromOffset(46, 20),
-    BackgroundColor3 = T.dark, BackgroundTransparency = 0.3, AutoButtonColor = false,
-    Text = "ADM", TextSize = 10, Font = Enum.Font.GothamBold, TextColor3 = T.blue,
-}, body)
-corner(admBtn, 10)
-make("UIStroke", { Color = T.line, Thickness = 1 }, admBtn)
-press(admBtn)
-
-local admOn = false
-local function showAdm(v)
-    admOn = v
-    if v then setOpen(false) end
-    farmLabel.Visible = not v
-    selBtn.Visible = not v
-    lower.Visible = not v
-    list.Visible = (not v) and open
-    admPage.Visible = v
-    admBtn.Text = v and "FARM" or "ADM"
-end
-admBtn.Activated:Connect(function() showAdm(not admOn) end)
 
 ------------------------------------------------------------------ ABRIR / FECHAR (minimizar em pílula)
 local busy = false
