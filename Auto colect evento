@@ -1,17 +1,16 @@
 --[[
     AUTO FARM EVENTO  |  by: angel
-    v4: abas Farm / ADM.
-      ADM -> GRAVAR detecta os drops (Up patente / Gamepass / Dinheiro); ao parar mostra o que achou;
-             APLICAR TODOS deixa só os detectados no dropdown principal (e registra os nomes achados).
-      Coleta mais rápida: teleporta + aciona no mesmo frame e já segue pro próximo.
-    O limite do jogo (1 presente de cada tipo) continua sendo respeitado.
+    v3: painel único, degradê preto -> azul-bebê, shimmer em listra discreta.
+    Dropdown preenchido com os drops confirmados pelo diagnóstico:
+      Up patente -> Workspace.Presente_UpPatente
+      Gamepass   -> Workspace.Presente_Gamepass
+      Dinheiro   -> MoneyBag (ainda não apareceu em nenhum diagnóstico)
     Estado exposto em getgenv().AutoFarmEvento
 ]]
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UIS = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
 local lp = Players.LocalPlayer
 
 ------------------------------------------------------------------ TEMA
@@ -23,7 +22,6 @@ local T = {
     sub = Color3.fromRGB(150, 166, 184),
     dark = Color3.fromRGB(8, 11, 16),
     pill = Color3.fromRGB(28, 35, 46),
-    red = Color3.fromRGB(226, 110, 110),
 }
 local WHITE = Color3.new(1, 1, 1)
 
@@ -33,7 +31,6 @@ local State = {
     UmDeCada = false, -- "Todos (1 de cada)"
     Ativo = false,
 }
-local Allowed = { UpPatente = true, Gamepass = true, Dinheiro = true } -- o que aparece no dropdown
 local Changed = Instance.new("BindableEvent")
 pcall(function()
     getgenv().AutoFarmEvento = { Estado = State, Mudou = Changed.Event }
@@ -92,16 +89,11 @@ end
 -- medidas
 local W = 300
 local HEAD = 64
-local TAB_H = 28
 local B_CLOSED = 82      -- início da seção "selecionados" (fechado), dentro do corpo
-local LIST_Y = 74
-local listH = 155        -- altura do dropdown (muda conforme o nº de opções)
-local EXTRA = LIST_Y + listH + 8 - B_CLOSED -- deslocamento quando o dropdown abre
+local LIST_Y, LIST_H = 74, 155
+local EXTRA = LIST_Y + LIST_H + 8 - B_CLOSED -- deslocamento quando o dropdown abre
 local LOWER_H = 132
-local TOP = HEAD + TAB_H
-local H_CLOSED = TOP + B_CLOSED + LOWER_H
-local ADM_BODY_H = 244
-local H_ADM = TOP + ADM_BODY_H
+local H_CLOSED = HEAD + B_CLOSED + LOWER_H
 local curH = H_CLOSED
 local curW = W
 
@@ -113,7 +105,7 @@ local rootScale = make("UIScale", {}, holder)
 
 local function fitScale()
     local v = gui.AbsoluteSize
-    return math.clamp(math.min(v.X / 340, v.Y / 500), 0.6, 1)
+    return math.clamp(math.min(v.X / 340, v.Y / 470), 0.65, 1)
 end
 local cur = { x = gui.AbsoluteSize.X / 2, y = math.max(20, gui.AbsoluteSize.Y / 2 - H_CLOSED / 2) }
 local function place()
@@ -126,6 +118,7 @@ rootScale.Scale = fitScale() * 0.9
 place()
 
 ------------------------------------------------------------------ PAINEL ÚNICO
+-- glow externo suave
 for _, g in ipairs({ { 4, 0.92, 20 }, { 10, 0.96, 26 } }) do
     local f = make("Frame", {
         AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
@@ -140,6 +133,7 @@ local panel = make("Frame", {
     BackgroundTransparency = 0.03, BorderSizePixel = 0,
 }, holder)
 local panelCorners = { corner(panel, 16) }
+-- degradê DENTRO do menu: preto -> tons de azul-bebê, com deriva lenta
 local panelGrad = make("UIGradient", {
     Rotation = 58,
     Color = ColorSequence.new({
@@ -154,6 +148,7 @@ local panelGrad = make("UIGradient", {
 }, panel)
 TweenService:Create(panelGrad, TweenInfo.new(9, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
     { Rotation = 74 }):Play()
+-- camadas de brilho suave em tons diferentes de azul-bebê
 for _, L in ipairs({
     { Color3.fromRGB(170, 222, 245), 135, -0.3, 0.3, 11 },
     { Color3.fromRGB(104, 168, 214), 40, 0.3, -0.3, 15 },
@@ -179,7 +174,7 @@ make("UIGradient", {
     Color = ColorSequence.new(T.blue, Color3.fromRGB(34, 48, 64)),
 }, pst)
 
--- shimmer
+-- shimmer: listra leve e discreta atravessando o painel
 local sh = make("Frame", {
     Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.fromRGB(200, 235, 252),
     BorderSizePixel = 0, Active = false,
@@ -206,6 +201,7 @@ end)
 ------------------------------------------------------------------ CABEÇALHO
 local content = make("CanvasGroup", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1 }, panel)
 
+-- minimizado: pílula pequena
 local MINI_W, MINI_H = 140, 36
 local dragMoved = false
 local miniGrp = make("CanvasGroup", {
@@ -267,6 +263,7 @@ corner(minBtn, 10)
 make("UIStroke", { Color = T.line, Thickness = 1 }, minBtn)
 press(minBtn)
 
+-- divisória com fade nas pontas
 local div = make("Frame", {
     Position = UDim2.fromOffset(14, HEAD - 1), Size = UDim2.new(1, -28, 0, 1),
     BackgroundColor3 = T.blue, BackgroundTransparency = 0.3, BorderSizePixel = 0,
@@ -277,26 +274,9 @@ make("UIGradient", {
     }),
 }, div)
 
------------------------------------------------------------------- ABAS (Farm / ADM)
-local tabRow = make("Frame", { Position = UDim2.fromOffset(0, HEAD), Size = UDim2.new(1, 0, 0, TAB_H), BackgroundTransparency = 1 }, content)
-local tabBtns, tabLines = {}, {}
-for i, nm in ipairs({ "FARM", "ADM" }) do
-    local b = make("TextButton", {
-        Position = UDim2.new((i - 1) * 0.5, 0, 0, 0), Size = UDim2.new(0.5, 0, 1, 0), BackgroundTransparency = 1,
-        AutoButtonColor = false, Text = nm, TextSize = 12, Font = Enum.Font.GothamBold,
-        TextColor3 = i == 1 and T.blue or T.sub,
-    }, tabRow)
-    tabLines[i] = make("Frame", {
-        Position = UDim2.new(0.25, 0, 1, -3), Size = UDim2.new(0.5, 0, 0, 2), BackgroundColor3 = T.blue,
-        BackgroundTransparency = i == 1 and 0 or 1, BorderSizePixel = 0,
-    }, b)
-    corner(tabLines[i], 1)
-    tabBtns[i] = b
-end
-
------------------------------------------------------------------- CORPO (aba Farm)
+------------------------------------------------------------------ CORPO
 local body = make("Frame", {
-    Position = UDim2.fromOffset(0, TOP), Size = UDim2.new(1, 0, 1, -TOP),
+    Position = UDim2.fromOffset(0, HEAD), Size = UDim2.new(1, 0, 1, -HEAD),
     BackgroundTransparency = 1, ClipsDescendants = true,
 }, content)
 
@@ -324,8 +304,8 @@ for _, d in ipairs({ { 4, 45 }, { 10, -45 } }) do
     corner(b, 1)
 end
 
------------------------------------------------------------------- LISTA (inline, reconstruível)
-local ALL_OPTS = {
+------------------------------------------------------------------ LISTA (inline)
+local OPTS = {
     { "UpPatente", "Up patente", "Upgrade de rank" },
     { "Gamepass", "Gamepass", "Passes liberados" },
     { "Dinheiro", "Dinheiro", "Cash dos drops" },
@@ -340,11 +320,6 @@ corner(list, 12)
 make("UIStroke", { Color = T.line, Thickness = 1, Transparency = 0.2 }, list)
 
 local rows = {}
-local function countAllowed()
-    local n = 0
-    for _, v in pairs(Allowed) do if v then n = n + 1 end end
-    return n
-end
 local function toggle(key)
     if key == "Todos" then
         State.UmDeCada = not State.UmDeCada
@@ -361,55 +336,38 @@ local function toggle(key)
 end
 
 local refresh -- definida abaixo
-local function buildRows()
-    for _, c in ipairs(list:GetChildren()) do
-        if not c:IsA("UICorner") and not c:IsA("UIStroke") then c:Destroy() end
-    end
-    rows = {}
-    local opts = {}
-    for _, o in ipairs(ALL_OPTS) do
-        if o[1] == "Todos" then
-            if countAllowed() >= 2 then opts[#opts + 1] = o end
-        elseif Allowed[o[1]] then
-            opts[#opts + 1] = o
-        end
-    end
-    listH = 5 + #opts * 37 + 2
-    EXTRA = LIST_Y + listH + 8 - B_CLOSED
-    for n, o in ipairs(opts) do
-        local row = make("TextButton", {
-            Position = UDim2.fromOffset(5, 5 + (n - 1) * 37), Size = UDim2.new(1, -10, 0, 34),
-            BackgroundColor3 = T.blue, BackgroundTransparency = 1, AutoButtonColor = false, Text = "",
+for n, o in ipairs(OPTS) do
+    local row = make("TextButton", {
+        Position = UDim2.fromOffset(5, 5 + (n - 1) * 37), Size = UDim2.new(1, -10, 0, 34),
+        BackgroundColor3 = T.blue, BackgroundTransparency = 1, AutoButtonColor = false, Text = "",
+    }, list)
+    corner(row, 9)
+    press(row)
+    local lb = text(row, o[2], 13, Enum.Font.GothamMedium, T.text, UDim2.fromOffset(12, 3), UDim2.new(1, -66, 0, 16))
+    text(row, o[3], 10, Enum.Font.Gotham, T.sub, UDim2.fromOffset(12, 19), UDim2.new(1, -66, 0, 12))
+    local pill = make("Frame", {
+        AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0),
+        Size = UDim2.fromOffset(36, 18), BackgroundColor3 = T.pill, BorderSizePixel = 0,
+    }, row)
+    corner(pill, 9)
+    local knob = make("Frame", {
+        Position = UDim2.fromOffset(3, 3), Size = UDim2.fromOffset(12, 12),
+        BackgroundColor3 = T.sub, BorderSizePixel = 0,
+    }, pill)
+    corner(knob, 6)
+    rows[o[1]] = { row = row, pill = pill, knob = knob, lb = lb }
+    row.Activated:Connect(function()
+        toggle(o[1])
+        Changed:Fire(State)
+        refresh()
+    end)
+    if n == 4 then
+        make("Frame", {
+            Position = UDim2.fromOffset(14, 5 + 3 * 37 - 2), Size = UDim2.new(1, -28, 0, 1),
+            BackgroundColor3 = T.line, BorderSizePixel = 0,
         }, list)
-        corner(row, 9)
-        press(row)
-        local lb = text(row, o[2], 13, Enum.Font.GothamMedium, T.text, UDim2.fromOffset(12, 3), UDim2.new(1, -66, 0, 16))
-        text(row, o[3], 10, Enum.Font.Gotham, T.sub, UDim2.fromOffset(12, 19), UDim2.new(1, -66, 0, 12))
-        local pill = make("Frame", {
-            AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0),
-            Size = UDim2.fromOffset(36, 18), BackgroundColor3 = T.pill, BorderSizePixel = 0,
-        }, row)
-        corner(pill, 9)
-        local knob = make("Frame", {
-            Position = UDim2.fromOffset(3, 3), Size = UDim2.fromOffset(12, 12),
-            BackgroundColor3 = T.sub, BorderSizePixel = 0,
-        }, pill)
-        corner(knob, 6)
-        rows[o[1]] = { row = row, pill = pill, knob = knob, lb = lb }
-        row.Activated:Connect(function()
-            toggle(o[1])
-            Changed:Fire(State)
-            refresh()
-        end)
-        if o[1] == "Todos" and n > 1 then
-            make("Frame", {
-                Position = UDim2.fromOffset(14, 5 + (n - 1) * 37 - 2), Size = UDim2.new(1, -28, 0, 1),
-                BackgroundColor3 = T.line, BorderSizePixel = 0,
-            }, list)
-        end
     end
 end
-buildRows()
 
 ------------------------------------------------------------------ SELEÇÃO + AÇÃO (embaixo)
 local lower = make("Frame", {
@@ -452,64 +410,6 @@ corner(actBtn, 11)
 local actGrad = make("UIGradient", { Color = ColorSequence.new(Color3.fromRGB(30, 38, 50), Color3.fromRGB(24, 30, 40)) }, actBtn)
 press(actBtn)
 
------------------------------------------------------------------- ABA ADM (UI)
-local admPage = make("Frame", {
-    Position = UDim2.fromOffset(0, TOP), Size = UDim2.new(1, 0, 1, -TOP),
-    BackgroundTransparency = 1, ClipsDescendants = true, Visible = false,
-}, content)
-
-local recGrad
-local recBtn = make("TextButton", {
-    Position = UDim2.fromOffset(14, 10), Size = UDim2.new(1, -28, 0, 38),
-    BackgroundColor3 = WHITE, AutoButtonColor = false, BorderSizePixel = 0,
-    Text = "● GRAVAR", TextSize = 13, Font = Enum.Font.GothamBold, TextColor3 = T.dark,
-}, admPage)
-corner(recBtn, 11)
-recGrad = make("UIGradient", { Color = ColorSequence.new(T.blue, T.blueDeep) }, recBtn)
-press(recBtn)
-
-local ADM_CATS = { { "UpPatente", "Up patente" }, { "Gamepass", "Gamepass" }, { "Dinheiro", "Dinheiro" } }
-local admRows = {}
-for n, c in ipairs(ADM_CATS) do
-    local f = make("Frame", {
-        Position = UDim2.fromOffset(14, 58 + (n - 1) * 32), Size = UDim2.new(1, -28, 0, 28),
-        BackgroundColor3 = T.dark, BackgroundTransparency = 0.3, BorderSizePixel = 0,
-    }, admPage)
-    corner(f, 9)
-    local st = make("UIStroke", { Color = T.line, Thickness = 1 }, f)
-    text(f, c[2], 12, Enum.Font.GothamMedium, T.text, UDim2.fromOffset(12, 0), UDim2.new(0.5, -12, 1, 0))
-    local val = text(f, "—", 12, Enum.Font.GothamBold, T.sub, UDim2.new(0.5, 0, 0, 0), UDim2.new(0.5, -12, 1, 0), Enum.TextXAlignment.Right)
-    admRows[c[1]] = { f = f, st = st, val = val }
-end
-local admInfo = make("TextLabel", {
-    BackgroundTransparency = 1, Position = UDim2.fromOffset(16, 156), Size = UDim2.new(1, -32, 0, 34),
-    Text = "Aperte GRAVAR, deixe os drops aparecerem e aperte de novo para ver o que foi detectado.",
-    TextSize = 10, Font = Enum.Font.Gotham, TextColor3 = T.sub, TextWrapped = true,
-    TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
-}, admPage)
-
-local applyGlow = make("Frame", {
-    Position = UDim2.fromOffset(10, 192), Size = UDim2.new(1, -20 - 46, 0, 46),
-    BackgroundColor3 = T.blue, BackgroundTransparency = 1, BorderSizePixel = 0,
-}, admPage)
-corner(applyGlow, 15)
-local applyBtn = make("TextButton", {
-    Position = UDim2.fromOffset(14, 196), Size = UDim2.new(1, -28 - 46, 0, 38),
-    BackgroundColor3 = WHITE, AutoButtonColor = false, BorderSizePixel = 0,
-    Text = "APLICAR TODOS", TextSize = 13, Font = Enum.Font.GothamBold, TextColor3 = T.sub,
-}, admPage)
-corner(applyBtn, 11)
-local applyGrad = make("UIGradient", { Color = ColorSequence.new(Color3.fromRGB(30, 38, 50), Color3.fromRGB(24, 30, 40)) }, applyBtn)
-press(applyBtn)
-local restBtn = make("TextButton", {
-    AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, 196), Size = UDim2.fromOffset(38, 38),
-    BackgroundColor3 = T.dark, BackgroundTransparency = 0.3, AutoButtonColor = false,
-    Text = "↺", TextSize = 18, Font = Enum.Font.GothamBold, TextColor3 = T.blue,
-}, admPage)
-corner(restBtn, 11)
-make("UIStroke", { Color = T.line, Thickness = 1 }, restBtn)
-press(restBtn)
-
 ------------------------------------------------------------------ REFRESH VISUAL
 local function anySel()
     return State.UmDeCada or State.Selecionados.UpPatente or State.Selecionados.Gamepass or State.Selecionados.Dinheiro
@@ -529,15 +429,13 @@ refresh = function()
 
     local names = {}
     for _, c in ipairs(CHIPS) do
-        if Allowed[c[1]] and State.Selecionados[c[1]] then table.insert(names, c[1] == "UpPatente" and "Up patente" or c[2]) end
+        if State.Selecionados[c[1]] then table.insert(names, c[1] == "UpPatente" and "Up patente" or c[2]) end
     end
     summary.Text = State.UmDeCada and "Todos (1 de cada)" or (#names > 0 and table.concat(names, ", ") or "Selecione...")
     tween(summary, 0.2, { TextColor3 = anySel() and T.text or T.sub })
 
     for key, c in pairs(chips) do
-        local lit = Allowed[key] and (State.UmDeCada or State.Selecionados[key])
-        c.f.Visible = Allowed[key]
-        c.glow.Visible = Allowed[key]
+        local lit = State.UmDeCada or State.Selecionados[key]
         c.lb.Text = State.UmDeCada and (c.base .. " ×1") or c.base
         tween(c.f, 0.22, { BackgroundTransparency = lit and 0.72 or 0.3, BackgroundColor3 = lit and T.blue or T.dark })
         tween(c.st, 0.22, { Color = lit and T.blue or T.line })
@@ -567,6 +465,7 @@ refresh = function()
 end
 
 ------------------------------------------------------------------ AUTO FARM (coleta)
+-- Instant interact: um toque no botão do prompt já coleta
 local ProximityPromptService = game:GetService("ProximityPromptService")
 local instantInteractEnabled = true
 ProximityPromptService.PromptButtonHoldBegan:Connect(function(prompt)
@@ -575,6 +474,7 @@ ProximityPromptService.PromptButtonHoldBegan:Connect(function(prompt)
     end
 end)
 
+-- nomes dos drops por categoria (UpPatente e Gamepass confirmados pelo diagnóstico)
 local RS = game:GetService("ReplicatedStorage")
 local CATS = {
     UpPatente = { "Presente_UpPatente" },
@@ -584,9 +484,11 @@ local CATS = {
 local PRIORITY = { "UpPatente", "Gamepass", "Dinheiro" } -- presentes somem rápido: vêm antes do dinheiro
 local giftDone, currentCat = {}, nil
 
--- o jogo só deixa resgatar 1 presente de cada tipo (limite do próprio jogo, respeitado aqui)
+-- o jogo só deixa resgatar 1 presente de cada tipo
 local function giftTaken(cat)
     if giftDone[cat] then return true end
+    -- diagnóstico: ao resgatar, o jogador ganha o atributo GamepassGiftCollects=1
+    -- (o de patente segue o padrão Gift sem "gamepass" no nome)
     for n, v in pairs(lp:GetAttributes()) do
         local l = n:lower()
         if l:find("gift", 1, true) and type(v) == "number" and v >= 1 then
@@ -622,13 +524,14 @@ local function posOf(o)
     return p
 end
 local function promptsOf(o)
-    local l = {}
+    local list = {}
     for _, x in ipairs(o:GetDescendants()) do
-        if x:IsA("ProximityPrompt") then l[#l + 1] = x end
+        if x:IsA("ProximityPrompt") then list[#list + 1] = x end
     end
-    return l
+    return list
 end
 
+-- palavras que identificam drop de dinheiro (nome do objeto OU texto do prompt)
 local MONEY_WORDS = { "moneybag", "money", "dinheiro", "cash", "grana" }
 local function hasWord(str, words)
     str = tostring(str or ""):lower()
@@ -638,7 +541,7 @@ local function hasWord(str, words)
     return false
 end
 local function isMoney(o)
-    if o:FindFirstChildOfClass("Humanoid") then return false end
+    if o:FindFirstChildOfClass("Humanoid") then return false end -- jogador/NPC nunca
     if hasWord(o.Name, MONEY_WORDS) then return true end
     for _, pr in ipairs(promptsOf(o)) do
         if hasWord(pr.ActionText, MONEY_WORDS) or hasWord(pr.ObjectText, MONEY_WORDS) then return true end
@@ -646,6 +549,7 @@ local function isMoney(o)
     return false
 end
 
+-- posição válida (evita teleportar pro vazio / coordenada estranha)
 local function sane(o)
     local p = posOf(o)
     return p ~= nil and p.X == p.X and p.Y == p.Y and p.Z == p.Z
@@ -657,6 +561,8 @@ local function hasActivePrompt(o)
     end
     return false
 end
+-- diagnóstico: Presente_UpPatente aparece parado, invisível e sem colisão (transp=1, anc=true, colide=false)
+-- = suspeito de ser só um marcador. Não teleporta pra ele.
 local function suspect(o)
     return o:IsA("BasePart") and o.Anchored and o.Transparency >= 1 and not o.CanCollide
 end
@@ -677,6 +583,7 @@ local function listTargets(cat)
             if not ok and cat == "Dinheiro" and not Players:GetPlayerFromCharacter(o) then
                 ok = isMoney(o)
             end
+            -- só alvo com posição válida e prompt ativo (senão seria teleporte no vazio)
             if ok and sane(o) and hasActivePrompt(o) then
                 out[#out + 1] = o
             end
@@ -684,164 +591,29 @@ local function listTargets(cat)
     end
     return out
 end
-local function sortByDist(l)
+local function sortByDist(list)
     local r = hrp()
-    if not r then return l end
-    table.sort(l, function(a, b)
+    if not r then return list end
+    table.sort(list, function(a, b)
         local pa, pb = posOf(a), posOf(b)
         return pa and pb and (pa - r.Position).Magnitude < (pb - r.Position).Magnitude or false
     end)
-    return l
+    return list
 end
 
------------------------------------------------------------------- GRAVADOR (aba ADM)
-local Rec = { on = false, hits = {}, seen = {}, conns = {}, onUpdate = nil }
-local CAT_LIST = { "UpPatente", "Gamepass", "Dinheiro" }
-local function recReset()
-    Rec.hits = {}
-    for _, c in ipairs(CAT_LIST) do Rec.hits[c] = { n = 0, names = {} } end
-    Rec.seen = {}
-end
-recReset()
-
-local function catOfText(t)
-    t = tostring(t or ""):lower()
-    if t:find("gamepass", 1, true) or t:find("game pass", 1, true) then return "Gamepass" end
-    if t:find("patente", 1, true) or t:find("rank", 1, true) or t:find("promo", 1, true) then return "UpPatente" end
-    if hasWord(t, MONEY_WORDS) then return "Dinheiro" end
-    return nil
-end
-local function recHit(cat, name, key)
-    if not Rec.on or not cat or not Rec.hits[cat] then return end
-    if key then
-        if Rec.seen[key] then return end
-        Rec.seen[key] = true
-    end
-    local h = Rec.hits[cat]
-    h.n = h.n + 1
-    if name then h.names[name] = true end
-    if Rec.onUpdate then pcall(Rec.onUpdate) end
-end
-local function strs(v, out, depth)
-    if type(v) == "string" then out[#out + 1] = v:lower()
-    elseif type(v) == "table" and depth < 3 then
-        for _, x in pairs(v) do strs(x, out, depth + 1) end
-    end
-end
--- drop = objeto solto no Workspace, com ProximityPrompt, cujo nome/prompt indica a categoria
-local function considerObj(o)
-    if not Rec.on or not o.Parent or SKIP[o.Name] then return end
-    if not (o:IsA("BasePart") or o:IsA("Model")) then return end
-    if Players:GetPlayerFromCharacter(o) or o:FindFirstChildOfClass("Humanoid") then return end
-    local prompts = promptsOf(o)
-    if #prompts == 0 then return end
-    local c = catOfText(o.Name)
-    if not c then
-        for _, pr in ipairs(prompts) do
-            c = catOfText(tostring(pr.ActionText) .. " " .. tostring(pr.ObjectText))
-            if c then break end
-        end
-    end
-    if c then recHit(c, o.Name, o) end
-end
-local function recAdd(c) Rec.conns[#Rec.conns + 1] = c end
-
-function Rec.start()
-    recReset()
-    Rec.on = true
-    -- 1) drops que já estão no mapa + os que aparecerem
-    for _, o in ipairs(workspace:GetChildren()) do task.spawn(considerObj, o) end
-    recAdd(workspace.ChildAdded:Connect(function(o)
-        task.delay(0.4, function() considerObj(o) end) -- espera o prompt nascer
-    end))
-    -- 2) avisos do jogo (presente / resgate)
-    pcall(function()
-        local n = 0
-        for _, d in ipairs(RS:GetDescendants()) do
-            if d:IsA("RemoteEvent") and n < 300 then
-                n = n + 1
-                local rname = d.Name:lower()
-                recAdd(d.OnClientEvent:Connect(function(...)
-                    pcall(function(...)
-                        local parts, a = { rname }, { ... }
-                        for i = 1, select("#", ...) do strs(a[i], parts, 0) end
-                        local t = table.concat(parts, " ")
-                        if hasWord(t, { "presente", "resgat", "ganhou", "recebeu", "gift", "drop" }) then
-                            recHit(catOfText(t), nil, nil)
-                        end
-                    end, ...)
-                end))
-            end
-        end
-    end)
-    -- 3) atributos do jogador (ex.: GamepassGiftCollects)
-    pcall(function()
-        recAdd(lp.AttributeChanged:Connect(function(n)
-            local v, l = lp:GetAttribute(n), n:lower()
-            if l:find("gift", 1, true) and type(v) == "number" and v >= 1 then
-                recHit(l:find("gamepass", 1, true) and "Gamepass" or "UpPatente", n, "attr:" .. n)
-            end
-        end))
-    end)
-    -- 4) leaderstats / valores: dinheiro subindo, patente mudando
-    pcall(function()
-        for _, v in ipairs(lp:GetDescendants()) do
-            if v:IsA("ValueBase") then
-                local nm = v.Name:lower()
-                local isMoneyV = hasWord(nm, MONEY_WORDS)
-                local isRank = nm:find("patente", 1, true) or nm:find("rank", 1, true)
-                if isMoneyV or isRank then
-                    local old = v.Value
-                    recAdd(v:GetPropertyChangedSignal("Value"):Connect(function()
-                        local new = v.Value
-                        local o = old
-                        old = new
-                        if isMoneyV then
-                            local a = tonumber((tostring(new):gsub("[^%d]", "")))
-                            local b = tonumber((tostring(o):gsub("[^%d]", "")))
-                            if a and b and a > b then recHit("Dinheiro", v.Name, nil) end
-                        elseif new ~= o then
-                            recHit("UpPatente", v.Name, nil)
-                        end
-                    end))
-                end
-            end
-        end
-    end)
-end
-function Rec.stop()
-    Rec.on = false
-    for _, c in ipairs(Rec.conns) do pcall(function() c:Disconnect() end) end
-    Rec.conns = {}
-end
-function Rec.namesOf(cat)
-    local l = {}
-    for n in pairs(Rec.hits[cat].names) do l[#l + 1] = n end
-    table.sort(l)
-    return l
-end
-function Rec.detected()
-    local d = {}
-    for _, c in ipairs(CAT_LIST) do
-        if Rec.hits[c].n > 0 then d[c] = true end
-    end
-    return d
-end
-
------------------------------------------------------------------- COLETA RÁPIDA
 local function tpTo(pos)
     local r = hrp()
     if not r then return end
     r.CFrame = CFrame.new(pos)
     pcall(function() r.AssemblyLinearVelocity = Vector3.zero end)
 end
-local function frame() RunService.Heartbeat:Wait() end
 
--- teleporta em cima, aciona NO MESMO FRAME e confirma frame a frame; ao pegar, já retorna pro próximo
+-- teleporta em cima, clica várias vezes rápido e já segue para o próximo
 local function collect(o, cat)
     currentCat = cat
+    -- marcador suspeito: tenta de longe, sem teleportar; se não resgatar, ignora por 90s
     if cat ~= "Dinheiro" and suspect(o) then
-        for _ = 1, 6 do
+        for _ = 1, 4 do
             for _, pr in ipairs(promptsOf(o)) do
                 pcall(function()
                     pr.HoldDuration = 0
@@ -849,7 +621,7 @@ local function collect(o, cat)
                     if fireproximityprompt then fireproximityprompt(pr) end
                 end)
             end
-            task.wait(0.05)
+            task.wait(0.1)
             if giftTaken(cat) then return true end
         end
         blacklist[o] = os.clock() + 90
@@ -874,10 +646,9 @@ local function collect(o, cat)
                 end)
             end
         end
-        frame()
-        if not o.Parent then return true end
+        task.wait(0.06)
         if cat ~= "Dinheiro" and giftTaken(cat) then return true end
-        if not fired and os.clock() - t0 > 0.3 then break end
+        if not fired and os.clock() - t0 > 0.5 then break end -- sem prompt ativo: não perde tempo
     end
     if o.Parent then
         blacklist[o] = os.clock() + 4
@@ -886,23 +657,23 @@ local function collect(o, cat)
     return true
 end
 
-local homeCF
+local homeCF -- ponto onde o farm foi iniciado
 local function farmLoop(token)
     while State.Ativo and farmToken == token and gui.Parent do
         local picks = {}
         for _, cat in ipairs(PRIORITY) do
-            if Allowed[cat] and (State.UmDeCada or State.Selecionados[cat]) then
+            if State.UmDeCada or State.Selecionados[cat] then
                 local l = sortByDist(listTargets(cat))
                 if l[1] then
                     picks[#picks + 1] = { l[1], cat }
-                    if not State.UmDeCada then break end
+                    if not State.UmDeCada then break end -- individual: um por vez, na ordem de prioridade
                 end
             end
         end
         if #picks == 0 or not hrp() then
             local onlyGifts, taken = true, true
             for _, cat in ipairs(PRIORITY) do
-                if Allowed[cat] and (State.UmDeCada or State.Selecionados[cat]) then
+                if State.UmDeCada or State.Selecionados[cat] then
                     if cat == "Dinheiro" then onlyGifts = false
                     elseif not giftTaken(cat) then taken = false end
                 end
@@ -910,10 +681,10 @@ local function farmLoop(token)
             radar.Text = (onlyGifts and taken) and "Radar de drops · presente já resgatado" or "Radar de drops · procurando drops..."
             local r = hrp()
             if r and homeCF and (r.Position - homeCF.Position).Magnitude > 25 then
-                r.CFrame = homeCF
+                r.CFrame = homeCF -- ocioso: volta pro ponto onde iniciou (não fica no ar/vazio)
                 pcall(function() r.AssemblyLinearVelocity = Vector3.zero end)
             end
-            task.wait(0.15)
+            task.wait(0.4)
         else
             for _, pk in ipairs(picks) do
                 if not (State.Ativo and farmToken == token) then break end
@@ -922,7 +693,6 @@ local function farmLoop(token)
                     collect(pk[1], pk[2])
                 end
             end
-            frame()
         end
     end
 end
@@ -940,11 +710,6 @@ end
 
 ------------------------------------------------------------------ INTERAÇÕES
 local open, mini = false, false
-local tab = 1
-local function fullH()
-    if tab == 2 then return H_ADM end
-    return H_CLOSED + (open and EXTRA or 0)
-end
 local function resize(h)
     curH = h
     tween(holder, 0.3, { Size = UDim2.fromOffset(curW, h) })
@@ -956,13 +721,13 @@ local function setOpen(v)
     open = v
     if v then
         list.Visible = true
-        tween(list, 0.3, { Size = UDim2.new(1, -28, 0, listH) })
+        tween(list, 0.3, { Size = UDim2.new(1, -28, 0, LIST_H) })
     else
         local tw = tween(list, 0.22, { Size = UDim2.new(1, -28, 0, 0) })
         tw.Completed:Connect(function() if not open then list.Visible = false end end)
     end
     tween(lower, 0.3, { Position = UDim2.fromOffset(0, B_CLOSED + (v and EXTRA or 0)) })
-    resize(fullH())
+    resize(H_CLOSED + (v and EXTRA or 0))
     tween(chev, 0.25, { Rotation = v and 180 or 0 })
     tween(selStroke, 0.2, { Color = v and T.blue or T.line })
 end
@@ -995,128 +760,6 @@ UIS.InputBegan:Connect(function(i)
     end
 end)
 
--- troca de aba
-local function setTab(n)
-    if tab == n then return end
-    if open then setOpen(false) end
-    tab = n
-    body.Visible = n == 1
-    admPage.Visible = n == 2
-    for i, b in ipairs(tabBtns) do
-        tween(b, 0.2, { TextColor3 = i == n and T.blue or T.sub })
-        tween(tabLines[i], 0.2, { BackgroundTransparency = i == n and 0 or 1 })
-    end
-    resize(fullH())
-end
-for i, b in ipairs(tabBtns) do
-    b.Activated:Connect(function() setTab(i) end)
-end
-
--- ADM: gravar / parar
-local function admRefreshRows(final)
-    for _, c in ipairs(CAT_LIST) do
-        local h, r = Rec.hits[c], admRows[c]
-        if h.n > 0 then
-            r.val.Text = "✔ " .. h.n .. "x"
-            r.val.TextColor3 = T.blue
-            tween(r.st, 0.2, { Color = T.blue })
-        else
-            r.val.Text = final and "✘ nada" or "…"
-            r.val.TextColor3 = final and T.red or T.sub
-            tween(r.st, 0.2, { Color = T.line })
-        end
-    end
-end
-local function setApplyEnabled(on)
-    applyGrad.Color = on and ColorSequence.new(T.blue, T.blueDeep)
-        or ColorSequence.new(Color3.fromRGB(30, 38, 50), Color3.fromRGB(24, 30, 40))
-    tween(applyBtn, 0.2, { TextColor3 = on and T.dark or T.sub })
-    tween(applyGlow, 0.3, { BackgroundTransparency = on and 0.85 or 1 })
-end
-Rec.onUpdate = function() admRefreshRows(false) end
-
-recBtn.Activated:Connect(function()
-    if not Rec.on then
-        Rec.start()
-        recBtn.Text = "■ PARAR GRAVAÇÃO"
-        recGrad.Color = ColorSequence.new(Color3.fromRGB(190, 80, 80), Color3.fromRGB(130, 48, 56))
-        recBtn.TextColor3 = WHITE
-        admInfo.Text = "Gravando... deixe os drops aparecerem no mapa."
-        admInfo.TextColor3 = T.blue
-        setApplyEnabled(false)
-        admRefreshRows(false)
-    else
-        Rec.stop()
-        recBtn.Text = "● GRAVAR"
-        recGrad.Color = ColorSequence.new(T.blue, T.blueDeep)
-        recBtn.TextColor3 = T.dark
-        admRefreshRows(true)
-        local found, any = {}, false
-        for _, c in ipairs(CAT_LIST) do
-            local nm = Rec.namesOf(c)
-            if Rec.hits[c].n > 0 then
-                any = true
-                found[#found + 1] = (c == "UpPatente" and "Patente" or c) .. (#nm > 0 and (": " .. table.concat(nm, ", ")) or "")
-            end
-        end
-        admInfo.Text = any and ("Detectado → " .. table.concat(found, " · ")) or "Nada detectado. Grave de novo quando houver drops no mapa."
-        admInfo.TextColor3 = any and T.text or T.sub
-        setApplyEnabled(any)
-    end
-end)
-
-applyBtn.Activated:Connect(function()
-    if Rec.on then
-        admInfo.Text = "Pare a gravação primeiro."; admInfo.TextColor3 = T.red
-        return
-    end
-    if State.Ativo then
-        admInfo.Text = "Pare o farm para aplicar."; admInfo.TextColor3 = T.red
-        return
-    end
-    local d = Rec.detected()
-    local list2 = {}
-    for _, c in ipairs(CAT_LIST) do if d[c] then list2[#list2 + 1] = c end end
-    if #list2 == 0 then
-        admInfo.Text = "Nada para aplicar. Grave primeiro."; admInfo.TextColor3 = T.red
-        return
-    end
-    for _, c in ipairs(CAT_LIST) do
-        Allowed[c] = d[c] == true
-        State.Selecionados[c] = d[c] == true
-        if d[c] then
-            for _, nm in ipairs(Rec.namesOf(c)) do
-                local has = false
-                for _, x in ipairs(CATS[c]) do if x == nm then has = true end end
-                if not has then table.insert(CATS[c], nm) end
-            end
-        end
-    end
-    State.UmDeCada = false
-    buildRows()
-    Changed:Fire(State)
-    refresh()
-    admInfo.Text = "✔ Aplicado: " .. table.concat(list2, ", ") .. ". Volte na aba FARM e inicie."
-    admInfo.TextColor3 = T.blue
-    setTab(1)
-end)
-
-restBtn.Activated:Connect(function()
-    if State.Ativo then
-        admInfo.Text = "Pare o farm para restaurar."; admInfo.TextColor3 = T.red
-        return
-    end
-    if open then setOpen(false) end
-    for c in pairs(Allowed) do Allowed[c] = true end
-    for c in pairs(State.Selecionados) do State.Selecionados[c] = false end
-    State.UmDeCada = false
-    buildRows()
-    refresh()
-    admInfo.Text = "Dropdown restaurado (Up patente, Gamepass, Dinheiro)."
-    admInfo.TextColor3 = T.sub
-end)
-setApplyEnabled(false)
-
 ------------------------------------------------------------------ ABRIR / FECHAR (minimizar em pílula)
 local busy = false
 local function setCorners(r)
@@ -1146,8 +789,8 @@ local function openMenu()
     tween(miniGrp, 0.15, { GroupTransparency = 1 })
     task.wait(0.15)
     miniGrp.Visible = false
-    curW, curH = W, fullH()
-    tween(holder, 0.6, { Size = UDim2.fromOffset(W, fullH()) }, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+    curW, curH = W, H_CLOSED
+    tween(holder, 0.6, { Size = UDim2.fromOffset(W, H_CLOSED) }, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
     setCorners(16)
     place()
     content.GroupTransparency = 1
@@ -1163,6 +806,7 @@ miniHit.Activated:Connect(function()
     task.spawn(openMenu)
 end)
 
+-- arrastar pelo cabeçalho (ou pela pílula)
 local function attachDrag(handle)
     local dragging, startIn, startCur
     handle.InputBegan:Connect(function(i)
